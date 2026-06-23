@@ -1,17 +1,30 @@
-# Zed Debug for Fusion 360 Python add-ins
+# Zed Debug for Autodesk Fusion Python add-ins
 
-Make **Zed** your debugger for Fusion 360 Python add-ins on macOS.
+Make **Zed** your debugger for Fusion Python add-ins on macOS.
 Fusion's **Debug** button in *Scripts and Add-Ins* is hardcoded to
 launch VS Code, and the `ms-python.python` extension injects `debugpy`
 for you. To use Zed (or any DAP client) you have to invert the model:
 the add-in starts a `debugpy` server in-process, and the editor
 attaches.
 
+![VS Code model vs. Zed model](assets/diagram-models.png)
+
 This repo contains the recipe, two helper scripts, and the four
 non-obvious traps that we hit during setup. Apply it to any Fusion
 add-in template — typical add-ins from Fusion's "New Add-In" generator
 work without modification beyond the small `run()` patch that
 `scripts/zed-enable-addin.sh` prints.
+
+### System view
+
+![System view: Fusion process with in-process debugpy attached to Zed over DAP](assets/diagram-system.png)
+
+Repo: [`schneik80/Zed_Debug`](https://github.com/schneik80/Zed_Debug) on GitHub.
+
+Scripts:
+
+- [`scripts/setup-fusion-debug.sh`](https://github.com/schneik80/Zed_Debug/blob/main/scripts/setup-fusion-debug.sh) — finds the current Fusion Python, installs `debugpy`, regenerates per-addin `.zed/settings.json` + `.env`.
+- [`scripts/zed-enable-addin.sh`](https://github.com/schneik80/Zed_Debug/blob/main/scripts/zed-enable-addin.sh) — applies the recipe to a specific add-in folder (anywhere on disk), writes `.zed/debug.json`, prints the `run()` patch.
 
 Assumed layout:
 
@@ -34,7 +47,9 @@ path; adjust if you cloned the repo elsewhere.
 2. In Fusion → **Scripts and Add-Ins** → select the add-in → **Run**
    (*not* Debug — Debug forces VS Code).
 3. Verify: `lsof -nP -iTCP:5678 -sTCP:LISTEN` shows exactly one Fusion PID.
-4. In Zed: **F4** → **Attach to Fusion 360**.
+4. In Zed: **F4** → **Attach to Fusion**.
+
+![Per-session workflow sequence: Run → listen → F4 attach → reload cycle](assets/diagram-workflow.png)
 
 To reload after a code edit: Scripts and Add-Ins → **Stop**, then **Run**,
 then re-attach in Zed. Python module caching means a fresh attach is
@@ -74,6 +89,8 @@ The script is idempotent. It:
    and `.env` (`PYTHONPATH`) so the webdeploy paths inside them stay
    pointed at the *current* Fusion install.
 
+![setup-fusion-debug.sh flow: locate webdeploy, ensurepip, install debugpy, rewrite settings and .env](assets/diagram-setup.png)
+
 Run it again any time:
 
 - Fusion auto-updates and pyright stops resolving `adsk.*` imports.
@@ -99,7 +116,7 @@ Done. Next:
   1. Set WAIT_FOR_DEBUGGER = True in /path/to/MyAddIn/config.py
   2. In Fusion: Scripts and Add-Ins -> Run (NOT Debug)
   3. Verify: lsof -nP -iTCP:5678 -sTCP:LISTEN
-  4. In Zed: F4 -> Attach to Fusion 360
+  4. In Zed: F4 -> Attach to Fusion
 ```
 
 ---
@@ -128,66 +145,70 @@ in `git status`. Check `ls -la` if you want to confirm.
 
 ## Applying the recipe to another add-in
 
-### Layout A: add-in already lives under `API/AddIns/`
+The add-in folder can live anywhere on disk. Fusion's **Scripts and
+Add-Ins** dialog supports loading add-ins from any path — you do not need
+to place them (or symlink them) under `~/Library/.../API/AddIns/`.
+The recommended layout for version-controlled add-ins is `~/Source/<name>/`.
 
 ```bash
-~/Source/Zed_Debug/scripts/zed-enable-addin.sh \
-  "$HOME/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/MyAddIn"
+~/Source/Zed_Debug/scripts/zed-enable-addin.sh ~/Source/MyAddIn
 ```
 
 The script will:
 
-- Run `setup-fusion-debug.sh <target>` to install/refresh debugpy and
-  write `.zed/settings.json` + `.env` straight into the target.
-- Write `OtherAddIn/.zed/debug.json` with `localRoot == remoteRoot` (no
-  path translation needed because Zed opens the same dir Fusion loads).
+- Run `setup-fusion-debug.sh <target>` to install/refresh `debugpy` and
+  write `.zed/settings.json` + `.env` into the target.
+- Write `.zed/debug.json`. `localRoot` equals `remoteRoot` (both are the
+  add-in folder), so no `pathMappings` are needed — Fusion loads from the
+  same absolute path Zed has open.
 - Remove any pre-existing `.vscode/` folder from the target (Zed owns
   debugging now).
 - If the target is a git repo, append `.zed/` and `.env` to its
   `.gitignore` if either is missing.
-- Print the two code blocks you need to paste into `OtherAddIn.py` and
+- Print the two code blocks you need to paste into `<name>.py` and
   `config.py` — these patches are deliberately *not* automated because
-  the existing structure of each add-in's `run()` varies.
+  each add-in's `run()` body varies.
 
-### Layout B: source lives under `~/Source/<name>/`
+### Register the add-in with Fusion (once per machine)
 
-This is the recommended layout for "real" add-ins under version
-control. Develop in `~/Source/<name>/`, let Fusion load from a symlink:
+After the script finishes, tell Fusion where to find the folder:
+
+1. Fusion → **File** → **Scripts and Add-Ins**.
+2. Switch to the **Add-Ins** tab.
+3. Click the green **+** button next to **My Add-Ins**.
+4. Browse to your add-in folder (e.g. `~/Source/MyAddIn/`) and select it.
+
+Fusion stores the absolute path in its `My Add-Ins` list and loads from
+that path in every subsequent session — no symlink, no copy, no path
+translation.
+
+![Add-in registration: developer adds folder to Fusion's My Add-Ins list, Zed opens the same folder](assets/diagram-register.png)
+
+### Migrating from the old symlink layout
+
+If you previously used a symlink under `~/Library/.../API/AddIns/<name>`
+(an earlier version of this recipe), remove it and re-register:
 
 ```bash
-~/Source/Zed_Debug/scripts/zed-enable-addin.sh \
-  "$HOME/Source/MyAddIn"
+rm "$HOME/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/MyAddIn"
+~/Source/Zed_Debug/scripts/zed-enable-addin.sh ~/Source/MyAddIn
+# then add ~/Source/MyAddIn via Fusion's Scripts and Add-Ins → +
 ```
 
-Difference vs. layout A:
-
-- The script creates a symlink:
-  `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/MyAddIn → ~/Source/MyAddIn`.
-- `.zed/debug.json` is written with **asymmetric** `pathMappings`:
-  - `localRoot` = `${ZED_WORKTREE_ROOT}` (your `~/Source/<name>/` workspace in Zed)
-  - `remoteRoot` = `~/Library/Application Support/.../API/AddIns/<name>` (where Fusion *actually* loads the code from, via the symlink)
-- Open Zed at `~/Source/<name>/`, not at the symlink.
-
-If breakpoints don't bind in this layout, check whether Python is
-resolving the symlink in `__file__`. If `__file__` reports the
-`~/Source/` path (resolved), set both `localRoot` and `remoteRoot` to
-the source path and remove the symlink translation. If it reports the
-`AddIns/` path (unresolved — the default), the asymmetric mapping above
-is correct.
-
-After the symlink is created, Fusion's **Scripts and Add-Ins** dialog
-needs to be closed and reopened (or Fusion restarted) before the new
-add-in appears in the list.
+Re-running the script rewrites `.zed/debug.json` without the old
+asymmetric `pathMappings`. Leftover mappings against the `AddIns/` path
+will stop breakpoints from binding once the symlink is gone.
 
 ### Cloning an add-in from version control
 
 For a teammate cloning an existing add-in fresh onto a new machine
 (assuming the recipe has been applied to that add-in already, so its
-main `.py` and `config.py` carry the debugpy bootstrap):
+main `.py` and `config.py` carry the `debugpy` bootstrap):
 
 ```bash
 git clone <repo> ~/Source/MyAddIn
 ~/Source/Zed_Debug/scripts/zed-enable-addin.sh ~/Source/MyAddIn
+# then add ~/Source/MyAddIn via Fusion's Scripts and Add-Ins → +
 ```
 
 The `.zed/` directory and `.env` are deliberately git-ignored — they

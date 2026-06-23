@@ -2,7 +2,7 @@
 #
 # setup-fusion-debug.sh
 #
-# Run this once on a fresh machine AND after every Fusion 360 auto-update.
+# Run this once on a fresh machine AND after every Autodesk Fusion auto-update.
 # It:
 #   1. Auto-detects the currently-installed Fusion's bundled Python
 #      (the webdeploy hash rotates on every upgrade, so we never hardcode).
@@ -96,4 +96,4 @@ echo "Done. Next:"
 echo "  1. Set WAIT_FOR_DEBUGGER = True in $ADDIN_DIR/config.py"
 echo "  2. In Fusion: Scripts and Add-Ins -> Run (NOT Debug)"
 echo "  3. Verify: lsof -nP -iTCP:5678 -sTCP:LISTEN"
-echo "  4. In Zed: F4 -> Attach to Fusion 360"
+echo "  4. In Zed: F4 -> Attach to Fusion"

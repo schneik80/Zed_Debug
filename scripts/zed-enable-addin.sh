@@ -2,30 +2,23 @@
 #
 # zed-enable-addin.sh
 #
-# Apply the Zed/debugpy debugging recipe to another Fusion add-in.
-#
-# Two layouts are supported:
-#
-#   (A) In-place: the add-in already lives under
-#       ~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/<name>/
-#       Just pass that path.
-#
-#   (B) ~/Source/: you develop in ~/Source/<name>/ and want Fusion to
-#       load from there. Pass the ~/Source/<name>/ path; this script
-#       creates the AddIns/<name>/ symlink for you and configures
-#       pathMappings so breakpoints work across the symlink boundary.
+# Apply the Zed/debugpy debugging recipe to an Autodesk Fusion add-in.
+# The add-in folder can live anywhere — Fusion's Scripts and Add-Ins
+# dialog supports loading add-ins from arbitrary paths (green "+" button
+# under "My Add-Ins" → browse to the folder). No symlinks needed.
 #
 # Usage:
 #   ./scripts/zed-enable-addin.sh /path/to/addin
 #
 # What it does:
-#   - Creates .zed/debug.json, .zed/settings.json, .env in the add-in
-#     (using current webdeploy paths via setup-fusion-debug.sh first).
-#   - Removes any pre-existing .vscode/ folder. Zed owns debugging now.
-#   - For ~/Source/ layout: symlinks AddIns/<name> -> ~/Source/<name>.
+#   - Installs debugpy into Fusion's user site (via setup-fusion-debug.sh).
+#   - Writes .zed/settings.json, .env, .zed/debug.json into the add-in.
+#   - Removes any pre-existing .vscode/ folder (Zed owns debugging now).
+#   - Adds .zed/ and .env to .gitignore if the folder is a git repo.
 #   - Prints (does NOT auto-edit) the two code blocks you need to paste
 #     into the add-in's main .py and config.py — these are too codebase-
 #     specific to patch blindly.
+#   - Prints final instructions on how to register the add-in in Fusion.
 
 set -euo pipefail
 
@@ -38,50 +31,13 @@ ADDIN_DIR="$(cd "$1" && pwd)"
 ADDIN_NAME="$(basename "$ADDIN_DIR")"
 MAIN_PY="$ADDIN_DIR/$ADDIN_NAME.py"
 CONFIG_PY="$ADDIN_DIR/config.py"
-FUSION_ADDINS="$HOME/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns"
-FUSION_LOAD_PATH="$FUSION_ADDINS/$ADDIN_NAME"
 
 [ -f "$MAIN_PY" ]   || { echo "no $MAIN_PY — expected main file matching folder name" >&2; exit 1; }
 [ -f "$CONFIG_PY" ] || { echo "no $CONFIG_PY — is this a Fusion add-in folder?" >&2; exit 1; }
 
-# Detect layout.
-case "$ADDIN_DIR" in
-    "$FUSION_ADDINS"/*)
-        LAYOUT="in-place"
-        LOCAL_ROOT="\${ZED_WORKTREE_ROOT}"
-        REMOTE_ROOT="\${ZED_WORKTREE_ROOT}"
-        ;;
-    *)
-        LAYOUT="source-symlink"
-        LOCAL_ROOT="\${ZED_WORKTREE_ROOT}"
-        REMOTE_ROOT="$FUSION_LOAD_PATH"
-        ;;
-esac
-
 echo "Add-in name: $ADDIN_NAME"
 echo "Add-in dir : $ADDIN_DIR"
-echo "Layout     : $LAYOUT"
 echo
-
-# For ~/Source/ layout, ensure Fusion has a path to load the add-in from.
-if [ "$LAYOUT" = "source-symlink" ]; then
-    mkdir -p "$FUSION_ADDINS"
-    if [ -L "$FUSION_LOAD_PATH" ]; then
-        existing="$(readlink "$FUSION_LOAD_PATH")"
-        if [ "$existing" = "$ADDIN_DIR" ]; then
-            echo "==> Symlink already in place: $FUSION_LOAD_PATH -> $ADDIN_DIR"
-        else
-            echo "Refusing to overwrite existing symlink: $FUSION_LOAD_PATH -> $existing" >&2
-            exit 1
-        fi
-    elif [ -e "$FUSION_LOAD_PATH" ]; then
-        echo "Refusing to overwrite existing file/dir at $FUSION_LOAD_PATH" >&2
-        exit 1
-    else
-        ln -s "$ADDIN_DIR" "$FUSION_LOAD_PATH"
-        echo "==> Created symlink: $FUSION_LOAD_PATH -> $ADDIN_DIR"
-    fi
-fi
 
 # Install debugpy and write .zed/settings.json + .env directly into the
 # target add-in (no intermediate copy).
@@ -120,16 +76,10 @@ cat > "$ADDIN_DIR/.zed/debug.json" <<JSON
 [
   {
     "adapter": "Debugpy",
-    "label": "Attach to Fusion 360 ($ADDIN_NAME)",
+    "label": "Attach to Fusion ($ADDIN_NAME)",
     "request": "attach",
     "connect": { "host": "127.0.0.1", "port": 5678 },
     "cwd": "\$ZED_WORKTREE_ROOT",
-    "pathMappings": [
-      {
-        "localRoot": "$LOCAL_ROOT",
-        "remoteRoot": "$REMOTE_ROOT"
-      }
-    ],
     "justMyCode": true
   }
 ]
@@ -173,8 +123,13 @@ def run(context):
 EOF
 
 echo "==> Done."
-echo "    Open Zed at: $ADDIN_DIR"
-if [ "$LAYOUT" = "source-symlink" ]; then
-    echo "    Fusion will load the add-in from the symlink at:"
-    echo "      $FUSION_LOAD_PATH"
-fi
+echo
+echo "Next:"
+echo "  1. Open Zed at:  $ADDIN_DIR"
+echo "  2. Register the add-in in Fusion (only needed once per machine):"
+echo "       Fusion → File → Scripts and Add-Ins → 'Add-Ins' tab"
+echo "       → click the green '+' next to 'My Add-Ins' → browse to:"
+echo "         $ADDIN_DIR"
+echo "     Fusion remembers the path; you do not need a symlink under"
+echo "     ~/Library/.../API/AddIns/."
+echo "  3. Select the add-in in the list → Run."
