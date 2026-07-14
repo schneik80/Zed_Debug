@@ -57,13 +57,39 @@ echo "Add-in dir    : $ADDIN_DIR"
 echo
 
 echo "==> Bootstrapping pip via ensurepip --user"
-"$FUSION_PY" -m ensurepip --user --upgrade
+"$FUSION_PY" -m ensurepip --user --upgrade || true
 
 echo "==> Installing/upgrading debugpy into Fusion's user site"
-"$FUSION_PY" -m pip install --user --upgrade --quiet debugpy
+if ! "$FUSION_PY" -m pip install --user --upgrade --quiet debugpy; then
+    echo "    pip install failed (offline / proxy-restricted network?)."
+    echo "    Will reuse an existing debugpy if one is already present."
+fi
 
+# The debugpy 'adapter' directory (…/site-packages/debugpy/adapter) is what Zed's
+# Debugpy DAP adapter is pointed at below. Empty if debugpy is unavailable.
 echo "==> Verifying debugpy"
-"$FUSION_PY" -c "import debugpy; print('  debugpy', debugpy.__version__, 'at', debugpy.__file__)"
+DEBUGPY_ADAPTER=""
+if "$FUSION_PY" -c "import debugpy" >/dev/null 2>&1; then
+    "$FUSION_PY" -c "import debugpy; print('  debugpy', debugpy.__version__, 'at', debugpy.__file__)"
+    FUSION_USER_SITE="$("$FUSION_PY" -c 'import site; print(site.getusersitepackages())')"
+    DEBUGPY_ADAPTER="$FUSION_USER_SITE/debugpy/adapter"
+else
+    echo "  debugpy is NOT available in Fusion's user site and could not be installed."
+    echo "  Zed's debugger needs it. If PyPI is blocked, copy an install in offline:"
+    echo "    US=\"\$('$FUSION_PY' -c 'import site;print(site.getusersitepackages())')\""
+    echo "    cp -R /path/to/debugpy /path/to/debugpy-*.dist-info \"\$US/\""
+fi
+
+# Zed's Debugpy adapter otherwise downloads its own copy of debugpy from PyPI on
+# every attach, which fails offline / behind a proxy. Zed reads
+# dap.<adapter>.binary (crates/project/.../dap_store.rs -> user_installed_path)
+# as the adapter path and SKIPS the download when it is set. Point it at the
+# user-site adapter so debugging works with no network. Omitted when debugpy is
+# unavailable (keeps the JSON valid — pyright still works).
+DAP_BLOCK=""
+if [ -n "$DEBUGPY_ADAPTER" ]; then
+    DAP_BLOCK=$(printf ',\n  "dap": {\n    "Debugpy": {\n      "binary": "%s"\n    }\n  }' "$DEBUGPY_ADAPTER")
+fi
 
 echo "==> Refreshing $ADDIN_DIR/.zed/settings.json"
 mkdir -p "$ADDIN_DIR/.zed"
@@ -82,7 +108,7 @@ cat > "$ADDIN_DIR/.zed/settings.json" <<JSON
         }
       }
     }
-  }
+  }$DAP_BLOCK
 }
 JSON
 
@@ -92,6 +118,10 @@ PYTHONPATH=$FUSION_API_PACKAGES
 ENV
 
 echo
+if [ -n "$DEBUGPY_ADAPTER" ]; then
+    echo "Zed debug adapter wired to: $DEBUGPY_ADAPTER"
+    echo "  (Zed uses this instead of downloading debugpy — works offline/behind a proxy.)"
+fi
 echo "Done. Next:"
 echo "  1. Set WAIT_FOR_DEBUGGER = True in $ADDIN_DIR/config.py"
 echo "  2. In Fusion: Scripts and Add-Ins -> Run (NOT Debug)"
